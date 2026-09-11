@@ -1,0 +1,128 @@
+IMPORTANT - READ BEFORE RUNNING ON A NEW PEPTIDE
+==================================================
+
+This repo was cleaned into a peptide-agnostic pipeline. The two example
+runs it was built and validated on (chlorotoxin / 1CHL and Plectasin /
+1ZFU) have been stripped out of the code itself. Every spot in the code
+that has to be re-filled for your own target peptide is wrapped like this:
+
+    # >>> PEPTIDE_SPECIFIC: replace for a new target peptide
+    ... peptide-specific value or comment ...
+    # <<< END_PEPTIDE_SPECIFIC
+
+Search the repo for "PEPTIDE_SPECIFIC" to find every one of these spots.
+As of this cleaning pass there are 21 tagged blocks across 6 files. This
+file explains what each one needs and in what order to fill them in.
+
+
+STEP 1 - Pick your target and get its structure
+------------------------------------------------
+You need:
+  - A PDB code for your peptide (a real, deposited structure - the
+    pipeline downloads it directly from RCSB).
+  - The chain ID within that PDB file that contains your peptide.
+  - The peptide's one-letter amino acid sequence (you can get this by
+    running phase1/structure_parser.py once and reading the printed
+    "Ingested Sequence" line, or by pulling it from the PDB entry
+    directly).
+
+
+STEP 2 - phase1/run_phase1.py
+------------------------------
+Set:
+    PDB_CODE = "your_pdb_code_lowercase"
+    CHAIN_ID = "X"
+These are the only two values this file needs changed. Everything else
+(KEGG mining, graph compilation, artifact persistence) is generic.
+
+
+STEP 3 - phase2/mask_builder.py  (the biggest change)
+-------------------------------------------------------
+This is where the frozen/mutable position mask lives, and it is
+peptide-specific by design: which residues to lock depends on your
+peptide's own disulfide bonds, binding face, and fold geometry.
+
+You need to set:
+    EXPECTED_SEQUENCE = "your peptide's sequence"
+
+Then define your own frozen layers (rename/restructure as needed - the
+three-layer split used in the example runs was just one way to organize
+it):
+    LAYER_1_DISULFIDE_LOCK   = { position: expected_residue, ... }
+    LAYER_2_TARGET_PATCH     = { position: expected_residue, ... }
+    LAYER_3_GEOMETRY_ANCHORS = { position: expected_residue, ... }
+    FROZEN_LAYERS = { "layer_name": LAYER_DICT, ... }
+
+Positions are 0-indexed against EXPECTED_SEQUENCE. Typical candidates for
+frozen positions: every cysteine involved in a disulfide bond, any
+residue known to be required for receptor/target binding, and any
+residue that anchors a turn or helix-initiation point in the fold.
+
+Also update the validation counts near the bottom of the file:
+    if frozen_count != 16:      -> change 16 to your frozen position count
+    if mutable_count != 20:     -> change 20 to your mutable position count
+These exist to catch a mismatched or stale mask - keep them in sync with
+whatever frozen/mutable split you choose.
+
+
+STEP 4 - phase2/protein_mpnn_runner.py
+-----------------------------------------
+One tagged comment notes that MODEL_NAME = "v_48_002" was chosen because
+it matched the high-resolution experimental structure used for the
+example runs. If your PDB entry has a different resolution or was solved
+by a different method (NMR vs. X-ray vs. cryo-EM), check the ProteinMPNN
+README for which vanilla model checkpoint is the right match, and update
+MODEL_NAME accordingly. If in doubt, v_48_002.pt (backbone noise 0.02) is
+a reasonable general-purpose default.
+
+
+STEP 5 - phase4/sequence_utils.py
+------------------------------------
+This just points at the same MASK_PATH used everywhere else
+("./pipeline_artifacts/phase2_mask.json"). Nothing to change here unless
+you've changed the artifacts directory convention - it's tagged only
+because the comment above it references the mask that Step 3 rebuilds.
+
+
+STEP 6 - phase4/existence_analysis.py
+-----------------------------------------
+Several print statements and one docstring reference the example peptide
+by name for readability (e.g. "does a variant exist that is better than
+wild-type"). None of these are functional - the analysis itself (Pareto
+inspection, Monte Carlo basin sampling, IVT argument, GP surrogate,
+homolog rediscovery) is fully generic and reads its inputs from Phase 1
+and Phase 4's artifacts. You can leave these as-is or swap the peptide
+name into the print strings for cleaner logs.
+
+
+STEP 7 - validators/validate_pareto_visualizer.py
+-----------------------------------------------------
+The wild-type marker on the Pareto plot is annotated with a label - update
+the annotation text if you want it to show your peptide's name instead of
+a generic "WT" marker. Purely cosmetic.
+
+
+STEP 8 (OPTIONAL) - phase5, the divergence experiment
+---------------------------------------------------------
+phase5/ (proxy_evaluator.py, run_phase5_proxy.py, divergence_analyzer.py)
+reruns Phase 4 with a physicochemical-proxy objective instead of FBA, then
+compares the two Pareto fronts. It has no peptide-specific hardcoding at
+all - it just needs Phase 1-4 to have already been run for your target.
+Run it if you want the same FBA-vs-proxy divergence comparison for your
+own peptide.
+
+
+CHECKLIST BEFORE YOUR FIRST RUN
+-----------------------------------
+[ ] PDB_CODE and CHAIN_ID set in phase1/run_phase1.py
+[ ] EXPECTED_SEQUENCE matches what structure_parser.py actually extracts
+[ ] Frozen layers defined and biologically justified in phase2/mask_builder.py
+[ ] frozen_count / mutable_count assertions updated to match your mask
+[ ] MODEL_NAME checked against your structure's resolution/method
+[ ] setup/setup.sh has been run so ProteinMPNN and iML1515.xml are present
+
+If you want an automated pass instead of doing this by hand, write a
+script that greps for "PEPTIDE_SPECIFIC" blocks and prompts for a
+replacement value per block - the tags above are deliberately structured
+(one clearly delimited block per peptide-specific decision) to make that
+straightforward.

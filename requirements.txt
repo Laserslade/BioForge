@@ -1,0 +1,14 @@
+biopython>=1.81
+networkx>=3.1
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+matplotlib>=3.7
+requests>=2.31
+torch>=2.0
+cobra>=0.29
+
+# Installed by setup.sh but not currently imported anywhere in the
+# pipeline (NSGA-II is implemented from scratch in phase4/nsga2_engine.py).
+# Left here in case a future contributor wires it in.
+pymoo>=0.6
