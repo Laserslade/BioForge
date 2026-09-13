@@ -27,6 +27,19 @@ AA_TO_BIGG_ID = {
     'V': 'val__L_c',
 }
 
+# Required translation-associated metabolites in the cytosol for this request.
+REQUIRED_TRANSLATION_METABOLITES = {
+    'atp_c',
+    'adp_c',
+    'amp_c',
+    'gtp_c',
+    'gdp_c',
+    'pi_c',
+    'ppi_c',
+    'h2o_c',
+    'h_c',
+}
+
 DEMAND_REACTION_ID = "DM_candidate_peptide"
 
 
@@ -34,14 +47,19 @@ class DemandBuilderError(Exception):
     pass
 
 
-def validate_metabolite_ids(model: cobra.Model, residues: set) -> None:
+def validate_metabolite_ids(model: cobra.Model, residues: set, required_metabolites: set | None = None) -> None:
     """
     Confirms every BiGG ID we're about to use actually exists in the
-    loaded model, for exactly the residues present in this sequence.
-    Fails with a specific, actionable error naming the bad ID(s) rather
-    than letting COBRApy raise a generic KeyError deep in add_boundary.
+    loaded model, for exactly the residues present in this sequence and the
+    model-level translation-energy cofactors required by this demand reaction.
     """
     missing = []
+
+    if required_metabolites is not None:
+        for metabolite_id in sorted(required_metabolites):
+            if metabolite_id not in model.metabolites:
+                missing.append(f"Missing required metabolite '{metabolite_id}' in loaded model")
+
     for residue in residues:
         if residue not in AA_TO_BIGG_ID:
             missing.append(f"'{residue}' has no entry in AA_TO_BIGG_ID at all")
@@ -52,21 +70,20 @@ def validate_metabolite_ids(model: cobra.Model, residues: set) -> None:
 
     if missing:
         raise DemandBuilderError(
-            "[ERROR] One or more amino acid metabolite IDs could not be validated "
-            "against the loaded model:\n  " + "\n  ".join(missing) +
-            "\nThis means AA_TO_BIGG_ID's naming pattern doesn't hold for these "
-            "residues in this model version. Look up the correct ID(s) at "
-            "http://bigg.ucsd.edu/models/iML1515/metabolites before proceeding -- "
-            "do not guess a fix."
+            "[ERROR] One or more metabolite IDs could not be validated against the loaded model:\n  "
+            + "\n  ".join(missing)
+            + "\nLook up the correct ID(s) at http://bigg.ucsd.edu/models/iML1515/metabolites "
+            "before proceeding -- do not guess a fix."
         )
 
 
-def build_demand_reaction(model: cobra.Model, sequence: str) -> cobra.Reaction:
+def build_demand_reaction(model: cobra.Model, sequence: str, include_translation_energy: bool = True) -> cobra.Reaction:
     """
-    Builds (but does not add to the model) a demand reaction draining
-    one unit of each amino acid precursor per occurrence in `sequence`.
-    Intended to be added inside a `with model:` block by fba_evaluator.py
-    so it's automatically reverted after each evaluation.
+    Builds (but does not add to the model) a demand reaction for the peptide.
+
+    When include_translation_energy is True, the reaction drains the amino acid
+    precursors plus the ATP/GTP costs of tRNA charging and ribosomal elongation.
+    When False, it reproduces the exact legacy amino-acid-only behavior.
     """
     if not sequence:
         raise DemandBuilderError("[ERROR] Cannot build a demand reaction for an empty sequence.")
@@ -75,10 +92,20 @@ def build_demand_reaction(model: cobra.Model, sequence: str) -> cobra.Reaction:
     for residue in sequence:
         residue_counts[residue] = residue_counts.get(residue, 0) + 1
 
-    validate_metabolite_ids(model, set(residue_counts.keys()))
+    validate_metabolite_ids(
+        model,
+        set(residue_counts.keys()),
+        required_metabolites=REQUIRED_TRANSLATION_METABOLITES if include_translation_energy else None,
+    )
 
     reaction = cobra.Reaction(DEMAND_REACTION_ID)
-    reaction.name = "Candidate peptide synthesis demand (amino-acid precursor burden only)"
+    if include_translation_energy:
+        reaction.name = (
+            "Candidate peptide synthesis demand "
+            "(amino-acid precursors + tRNA charging + ribosomal elongation energy)"
+        )
+    else:
+        reaction.name = "Candidate peptide synthesis demand (amino-acid precursor burden only)"
     reaction.lower_bound = 0
     reaction.upper_bound = 1000  # effectively unconstrained forward flux
 
@@ -87,7 +114,28 @@ def build_demand_reaction(model: cobra.Model, sequence: str) -> cobra.Reaction:
         bigg_id = AA_TO_BIGG_ID[residue]
         metabolite = model.metabolites.get_by_id(bigg_id)
         # Negative coefficient = consumed (this is the demand side).
-        metabolite_coefficients[metabolite] = -float(count)
+        metabolite_coefficients[metabolite] = metabolite_coefficients.get(metabolite, 0.0) - float(count)
+
+    if include_translation_energy:
+        n_charging_events = len(sequence)
+        n_elongation_events = len(sequence) - 1 if len(sequence) > 1 else 0
+
+        # The model represents ATP maintenance as ATP + H2O -> ADP + H + Pi.
+        # We mirror that exact convention for GTP hydrolysis in the elongation term.
+        # Initiation/termination GTP costs are intentionally omitted as a minor
+        # refinement and are not part of the current demand reaction scope.
+        for metabolite_id, delta in {
+            'atp_c': -n_charging_events,
+            'amp_c': +n_charging_events,
+            'ppi_c': +n_charging_events,
+            'gtp_c': -(2 * n_elongation_events),
+            'h2o_c': -(2 * n_elongation_events),
+            'gdp_c': +(2 * n_elongation_events),
+            'pi_c': +(2 * n_elongation_events),
+            'h_c': +(2 * n_elongation_events),
+        }.items():
+            metabolite = model.metabolites.get_by_id(metabolite_id)
+            metabolite_coefficients[metabolite] = metabolite_coefficients.get(metabolite, 0.0) + float(delta)
 
     reaction.add_metabolites(metabolite_coefficients)
     return reaction
