@@ -1,16 +1,21 @@
 """fba_evaluator.py - Runs flux balance analysis to score a candidate sequence's metabolic production burden."""
 
+try:
+    from .peptide_demand_builder import DEMAND_REACTION_ID, build_demand_reaction
+except ImportError:  # pragma: no cover - direct script execution fallback
+    from peptide_demand_builder import DEMAND_REACTION_ID, build_demand_reaction
+
 
 class FBAEvaluatorError(Exception):
     pass
 
 
 # How much peptide-equivalent flux to force through the demand reaction.
-#
 PEPTIDE_DEMAND_FLUX = 0.01
 
 
-def evaluate_candidate(model, sequence: str, baseline_growth: float = None) -> dict:
+def evaluate_candidate(model, sequence: str, baseline_growth: float = None,
+                      include_translation_energy: bool = True) -> dict:
     """
     Scores a single candidate sequence's Metabolic Production Burden (MPB).
 
@@ -20,6 +25,10 @@ def evaluate_candidate(model, sequence: str, baseline_growth: float = None) -> d
     baseline_growth:   unconstrained growth rate to compare against. If not
                         supplied, computed fresh each call (slightly slower,
                         but avoids relying on caller-supplied state going stale).
+    include_translation_energy:
+                        When True, includes ATP/GTP translation overhead in the
+                        same demand reaction. When False, preserves the legacy
+                        amino-acid-only demand reaction for direct A/B comparison.
 
     Returns:
         {
@@ -41,7 +50,11 @@ def evaluate_candidate(model, sequence: str, baseline_growth: float = None) -> d
         baseline_growth = baseline_solution.objective_value
 
     with model:
-        demand_reaction = build_demand_reaction(model, sequence)
+        demand_reaction = build_demand_reaction(
+            model,
+            sequence,
+            include_translation_energy=include_translation_energy,
+        )
         model.add_reactions([demand_reaction])
 
         # Force flux through the demand reaction: the model must actually
