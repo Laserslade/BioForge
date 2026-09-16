@@ -11,7 +11,7 @@ AA_TO_IDX   = {aa: i for i, aa in enumerate(AMINO_ACIDS)}
 
 # >>> PEPTIDE_SPECIFIC: replace for a new target peptide
 # Wild-type chlorotoxin (1CHL chain A, 36 residues)
-WILD_TYPE = "MCMPCFTTDHQMARRCDDCCGGKGRGKCYGPQCLCR"
+WILD_TYPE = "MCMPCFTTDHQMARKCDDCCGGKGRGKCYGPQCLCR"
 # <<< END_PEPTIDE_SPECIFIC
 
 # WT MPB from the Phase 4 Enhanced run (growth_percent_reduction, %)
